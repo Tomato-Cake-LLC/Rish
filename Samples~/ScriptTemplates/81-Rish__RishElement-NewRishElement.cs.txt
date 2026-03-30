@@ -1,0 +1,8 @@
+using RishUI;
+
+#ROOTNAMESPACEBEGIN#
+public partial class #SCRIPTNAME# : RishElement
+{
+    protected override Element Render() => Element.Null;
+}
+#ROOTNAMESPACEEND#

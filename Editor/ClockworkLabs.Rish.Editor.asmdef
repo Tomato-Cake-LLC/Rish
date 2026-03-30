@@ -1,0 +1,19 @@
+{
+    "name": "ClockworkLabs.Rish.Editor",
+    "rootNamespace": "RishUI.Editor",
+    "references": [
+        "GUID:f78b56649bf2463a942c93c39bfdd81f",
+        "GUID:8b1612d3d2c9fc44e970ff9d0c84c30f"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

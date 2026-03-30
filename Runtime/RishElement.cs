@@ -1,0 +1,652 @@
+using System.Collections.Generic;
+using RishUI.Events;
+using RishUI.MemoryManagement;
+using Sappy;
+using UnityEngine;
+using UnityEngine.UIElements;
+
+namespace RishUI
+{
+    [RishValueType]
+    public struct NoProps { }
+
+    internal interface IRishElement : IElement
+    {
+        SapTargets<bool> OnDirty { get; }
+        SapTargets OnReadyToUnmount { get; }
+        
+        void Mount(Node node);
+        void RequestUnmount();
+        void Unmount();
+
+        [RequiresManagedContext]
+        Element Render();
+        
+        Node Node { get; }
+        VisualManipulator VisualManipulator { get; }
+        int FocusIndex { get; }
+        
+        ToolkitEventsManager EventsManager { get; }
+
+        int IElement.ID => Node?.ID ?? -1;
+    }
+
+    public abstract class RishElement<P> : IRishElement where P : struct
+    {
+        private SapStem<bool> OnDirtyStem { get; } = new();
+        SapTargets<bool> IRishElement.OnDirty => OnDirtyStem.Targets;
+        
+        private SapStem OnReadyToUnmountStem { get; } = new();
+        SapTargets IRishElement.OnReadyToUnmount => OnReadyToUnmountStem.Targets;
+
+        private SapStem OnMountedStem { get; } = new();
+        private protected SapTargets OnMounted => OnMountedStem.Targets;
+        SapTargets IElement.OnMounted => OnMounted;
+        private SapStem OnUnmountingStem { get; } = new();
+        private protected SapTargets OnUnmounting => OnUnmountingStem.Targets;
+        private SapStem OnUnmountedStem { get; } = new();
+        private protected SapTargets OnUnmounted => OnUnmountedStem.Targets;
+        SapTargets IElement.OnUnmounted => OnUnmounted;
+        
+        private ContextOwner ContextOwner { get; } = new();
+
+        private int FocusIndex { get; set; } = -1;
+        int IRishElement.FocusIndex => FocusIndex;
+        
+        private ToolkitEventsManager EventsManager { get; } = new();
+        ToolkitEventsManager IRishElement.EventsManager => EventsManager;
+        
+        private Node _node;
+        private Node Node
+        {
+            get => _node;
+            set
+            {
+                _node = value;
+                NodeID = value?.ID ?? -1;
+            }
+        }
+        Node IRishElement.Node => Node;
+        protected int NodeID { get; private set; }
+        
+        private VisualManipulator VisualManipulator { get; }
+        VisualManipulator IRishElement.VisualManipulator => VisualManipulator;
+        
+        private P? _props;
+        public P Props
+        {
+            get
+            {
+                if (!_props.HasValue)
+                {
+#if UNITY_EDITOR
+                    throw new UnityException($"Accessing unset {typeof(P)}. You should not access Props at this point.");
+#else
+                    return default;
+#endif
+                }
+                
+                return _props.Value;
+            }
+        }
+        
+        private bool UnmountRequested { get; set; }
+        private bool ReadyToUnmount { get; set; }
+
+        protected bool IsDirty() => Node?.IsDirty() ?? false;
+
+        public T GetFirstAncestorOfType<T>() where T : class => Node?.GetFirstAncestorOfType<T>();
+
+        VisualElement IElement.GetVisualChild() => GetVisualChild();
+        public VisualElement GetVisualChild() => Node?.GetVisualDescendant()?.VisualElement;
+        
+        private VisualElement _visualParent;
+        public VisualElement VisualParent => _visualParent ??= GetFirstAncestorOfType<VisualElement>();
+
+        public RishElement()
+        {
+            VisualManipulator = this is IVisualManipulator visualManipulator ? new VisualManipulator(visualManipulator) : null;
+        }
+
+        internal bool SetProps(P value)
+        {
+            var propsSet = _props.HasValue;
+            var dirty = propsSet && !RishUtils.SmartCompare(value, _props.Value);
+                
+            var propsListener = this as IPropsListener;
+            var typedPropsListener = this as IPropsListener<P>;
+            var allPropsListener = this as IAllPropsListener<P>;
+            if (propsSet)
+            {
+                if (dirty)
+                {
+                    propsListener?.PropsWillChange();
+                    typedPropsListener?.PropsWillChange();
+                }
+                allPropsListener?.PropsWillChange();
+            }
+
+            var oldValue = _props;
+            _props = value;
+            
+            if (!propsSet || dirty)
+            {
+                propsListener?.PropsDidChange();
+                typedPropsListener?.PropsDidChange(oldValue);
+            }
+            allPropsListener?.PropsDidChange(oldValue);
+
+            if (this is IManaged<P> managed)
+            {
+                managed.ClaimReferences(value);
+            }
+            
+            if(dirty)
+            {
+                VisualManipulator?.TrickleDown();
+            }
+            
+            return !propsSet || dirty;
+        }
+
+        protected void ClaimCurrentContext() => ContextOwner.ClaimCurrent();
+        protected void ClaimContext(ManagedContext context) => ContextOwner.Claim(context);
+        protected void ReleaseContext(ManagedContext context) => ContextOwner.Release(context);
+        
+        protected void ClaimCurrentContext(int id) => ContextOwner.ClaimCurrent(id);
+        protected void ClaimContext(int id, ManagedContext context) => ContextOwner.Claim(id, context);
+        protected void ReleaseContext(int id) => ContextOwner.Release(id);
+
+        /// <summary>
+        /// Flag this element as Dirty.
+        /// </summary>
+        [SapTarget]
+        protected void Dirty() => Dirty(false);
+        /// <summary>
+        /// Flag this element as Dirty.
+        /// </summary>
+        /// <param name="immediate">If true, Rish will render this element on the current update step.</param>
+        protected void Dirty(bool immediate) => OnDirtyStem.Send(immediate);
+        void IElement.Dirty(bool immediate) => Dirty(immediate);
+        
+        /// <summary>
+        /// Flags this element as ready to be unmounted after unmounting was requested.
+        /// </summary>
+        [SapTarget]
+        protected void CanUnmount()
+        {
+            if (!UnmountRequested || ReadyToUnmount)
+            {
+                return;
+            }
+            
+            ReadyToUnmount = true;
+            OnReadyToUnmountStem.Send();
+        }
+
+        void IRishElement.Mount(Node node)
+        {
+            if (this is IManualState customComponent)
+            {
+                customComponent.Restart();
+            }
+
+            Node = node;
+            _visualParent = null;
+            
+            _props = null;
+            OnMountedStem.Send();
+            
+            UnmountRequested = false;
+            ReadyToUnmount = false;
+
+            if (this is IMountingListener listener)
+            {
+                listener.ElementDidMount();
+            }
+            
+            Dirty();
+        }
+
+        void IRishElement.RequestUnmount()
+        {
+            if (UnmountRequested || ReadyToUnmount) return;
+
+            UnmountRequested = true;
+
+            if (this is ICustomUnmountListener listener)
+            {
+                listener.UnmountRequested();
+            }
+            else
+            {
+                CanUnmount();
+            }
+        }
+
+        void IRishElement.Unmount()
+        {
+            var propsListener = this as IPropsListener;
+            var typedPropsListener = this as IPropsListener<P>;
+            var allPropsListener = this as IAllPropsListener<P>;
+            propsListener?.PropsWillChange();
+            typedPropsListener?.PropsWillChange();
+            allPropsListener?.PropsWillChange();
+            
+            if (this is IMountingListener mountingListener)
+            {
+                mountingListener.ElementWillUnmount();
+            }
+
+            ContextOwner.ReleaseAll();
+            
+            OnUnmountingStem.Send();
+            
+            Node = null;
+            
+            if (this is ICustomUnmountListener customUnmountListener)
+            {
+                customUnmountListener.Unmounted();
+            }
+            
+            OnUnmountedStem.Send();
+        }
+        
+        Element IRishElement.Render()
+        {
+#if UNITY_EDITOR
+            if (!_props.HasValue)
+            {
+                throw new UnityException($"Invalid state. Props of {GetType().Name} ({typeof(P)}) was never set.");
+            }
+#endif
+
+            return Render();
+        }
+
+        [RequiresManagedContext]
+        protected abstract Element Render();
+        
+        public void AddManipulator(ToolkitManipulator manipulator)
+        {
+            if (manipulator == null) return;
+            
+            if (manipulator.Owner != null)
+            {
+                if (manipulator.Owner == this) return;
+                
+                throw new UnityException("Manipulator already has an owner");
+            }
+
+            manipulator.Reset();
+            manipulator.Owner = this;
+            
+            EventsManager.AddManipulator(manipulator);
+        }
+        
+        public void RemoveManipulator(ToolkitManipulator manipulator)
+        {
+            if (manipulator == null) return;
+            
+            if (manipulator.Owner != this)
+            {
+                throw new UnityException("Manipulator doesn't belong to this element");
+            }
+
+            manipulator.Owner = null;
+            
+            EventsManager.RemoveManipulator(manipulator);
+        }
+
+        /// <summary>
+        /// Register event callback for a UIToolkit event. This element must have a VisualElement descendant to be able to handle UIToolkit events.
+        /// </summary>
+        public void RegisterCallback<TEventType>(EventCallback<TEventType> callback, EventPhase phase = EventPhase.BubbleUp) where TEventType : EventBase<TEventType>, new() =>
+            EventsManager.AddCallback(callback, phase);
+
+        /// <summary>
+        /// Unregister event callback for a UIToolkit event.
+        /// </summary>
+        public void UnregisterCallback<TEventType>(EventCallback<TEventType> callback, EventPhase phase = EventPhase.BubbleUp) where TEventType : EventBase<TEventType>, new() =>
+            EventsManager.RemoveCallback(callback, phase);
+        
+        /// <summary>
+        /// Flags this element as focusable.
+        /// </summary>
+        /// <param name="index">Focus index of this element when navigating using Tab key.</param>
+        public void Focusable(uint index = 0)
+        {
+            FocusIndex = (int)index;
+
+            Node?.InputSystem.SetFocusIndex(FocusIndex);
+        }
+        /// <summary>
+        /// Flags this element as not focusable.
+        /// </summary>
+        public void NotFocusable()
+        {
+            FocusIndex = -1;
+
+            Node?.InputSystem.SetFocusIndex(FocusIndex);
+        }
+        
+        /// <summary>
+        /// Whether this element has keyboard focus.
+        /// </summary>
+        public bool HasFocus
+        {
+            get
+            {
+                var child = GetVisualChild();
+                return child?.focusController?.focusedElement == child;
+            }
+        }
+
+        /// <summary>
+        /// Get keyboard focus. If the element isn't focusable, this will have no effect.
+        /// </summary>
+        public void Focus() => Node?.InputSystem.Focus();
+        /// <summary>
+        /// Lose keyboard focus.
+        /// </summary>
+        public void Blur() => Node?.InputSystem.Blur();
+        
+        public void CapturePointer(int pointerId) => Node?.InputSystem.CapturePointer(pointerId);
+        public void ReleasePointer(int pointerId) => Node?.InputSystem.ReleasePointer(pointerId);
+        public void CaptureMouse() => CapturePointer(PointerId.mousePointerId);
+        public void ReleaseMouse() => ReleasePointer(PointerId.mousePointerId);
+        public bool ContainsPoint(Vector2 localPoint) => GetVisualChild()?.ContainsPoint(localPoint) ?? false;
+        
+        /// <summary>
+        /// Transforms a rect from the world space to the local space of the element.
+        /// </summary>
+        /// <param name="rect">The rect to transform, in world space.</param>
+        /// <returns>
+        /// A rect in the local space of the element.
+        /// </returns>
+        public Rect WorldToLocal(Rect rect) => GetVisualChild()?.WorldToLocal(rect) ?? default;
+        /// <summary>
+        /// Transforms a point from the world space to the local space of the element.
+        /// </summary>
+        /// <param name="point">The point to transform, in world space.</param>
+        /// <returns>
+        /// A point in the local space of the element.
+        /// </returns>
+        public Vector2 WorldToLocal(Vector2 point) => GetVisualChild()?.WorldToLocal(point) ?? default;
+        /// <summary>
+        /// Transforms a rect from the local space of the element to the world space.
+        /// </summary>
+        /// <param name="rect">The rect to transform, in local space.</param>
+        /// <returns>
+        /// A rect in the world space.
+        /// </returns>
+        public Rect LocalToWorld(Rect rect) => GetVisualChild()?.LocalToWorld(rect) ?? default;
+        /// <summary>
+        /// Transforms a point from the local space of the element to the world space.
+        /// </summary>
+        /// <param name="point">The point to transform, in local space.</param>
+        /// <returns>
+        /// A point in the world space.
+        /// </returns>
+        public Vector2 LocalToWorld(Vector2 point) => GetVisualChild()?.LocalToWorld(point) ?? default;
+        /// <summary>
+        /// Transforms a rect from the local space of an element to the local space of another element.
+        /// </summary>
+        /// <param name="other">The element to use as a reference as the destination local space.</param>
+        /// <param name="rect">The rect to transform, in the local space of the source element.</param>
+        /// <returns>
+        /// A rect in the local space of destination element.
+        /// </returns>
+        public Rect ChangeCoordinatesTo(IElement other, Rect rect) => ChangeCoordinatesTo(other.GetVisualChild(), rect);
+        /// <summary>
+        /// Transforms a point from the local space of an element to the local space of another element.
+        /// </summary>
+        /// <param name="other">The element to use as a reference as the destination local space.</param>
+        /// <param name="point">The point to transform, in the local space of the source element.</param>
+        /// <returns>
+        /// A point in the local space of destination element.
+        /// </returns>
+        public Vector2 ChangeCoordinatesTo(IElement other, Vector2 point) => ChangeCoordinatesTo(other.GetVisualChild(), point);
+        /// <summary>
+        /// Transforms a rect from the local space of an element to the local space of another element.
+        /// </summary>
+        /// <param name="other">The element to use as a reference as the destination local space.</param>
+        /// <param name="rect">The rect to transform, in the local space of the source element.</param>
+        /// <returns>
+        /// A rect in the local space of destination element.
+        /// </returns>
+        public Rect ChangeCoordinatesTo(VisualElement other, Rect rect) => GetVisualChild()?.ChangeCoordinatesTo(other, rect) ?? default;
+        /// <summary>
+        /// Transforms a point from the local space of an element to the local space of another element.
+        /// </summary>
+        /// <param name="other">The element to use as a reference as the destination local space.</param>
+        /// <param name="point">The point to transform, in the local space of the source element.</param>
+        /// <returns>
+        /// A point in the local space of destination element.
+        /// </returns>
+        public Vector2 ChangeCoordinatesTo(VisualElement other, Vector2 point) => GetVisualChild()?.ChangeCoordinatesTo(other, point) ?? default;
+        
+        /// <summary>
+        /// The rectangle of the content area of the element, in the local space of the element.
+        /// </summary>
+        public Rect ContentRect => GetVisualChild()?.contentRect ?? default;
+        /// <summary>
+        /// The position and size of the VisualElement relative to its parent, as computed by the layout system.
+        /// </summary>
+        public Rect Layout => GetVisualChild()?.layout ?? default;
+        public Rect BoundingBox => GetVisualChild()?.GetBoundingBox() ?? default;
+
+        /// <summary>
+        /// The rectangle of the content area of the element, in world space.
+        /// </summary>
+        public Rect WorldContentRect
+        {
+            get
+            {
+                var child = GetVisualChild();
+                return child?.LocalToWorld(child.contentRect) ?? default;
+            }
+        }
+        /// <summary>
+        /// The position and size of the VisualElement relative to its parent, in world space, as computed by the layout system.
+        /// </summary>
+        public Rect WorldLayout
+        {
+            get
+            {
+                var child = GetVisualChild();
+                var parent = child?.parent;
+                return parent?.LocalToWorld(child.layout) ?? default;
+            }
+        }
+        public Rect WorldBoundingBox => GetVisualChild()?.GetWorldBoundingBox() ?? default;
+
+        /// <summary>
+        /// The rectangle of the content area of the parent of this element, in world space.
+        /// </summary>
+        public Rect ParentWorldContentRect
+        {
+            get
+            {
+                var parent = VisualParent;
+                return parent?.LocalToWorld(parent.contentRect) ?? default;
+            }
+        }
+        /// <summary>
+        /// The position and size of the VisualElement relative to its parent, in world space, of the parent in this element as computed by the layout system.
+        /// </summary>
+        public Rect ParentWorldLayout
+        {
+            get
+            {
+                var parent = VisualParent;
+                var grandParent = parent?.parent;
+                return grandParent?.LocalToWorld(parent.layout) ?? default;
+            }
+        }
+        public Rect ParentWorldBoundingBox
+        {
+            get
+            {
+                var parent = VisualParent;
+                return parent?.GetWorldBoundingBox() ?? default;
+            }
+        }
+
+        /// <summary>
+        /// Returns the top element at this position. Will not return elements with pickingMode set to PickingMode.Ignore.
+        /// </summary>
+        /// <param name="point">World coordinates.</param>
+        /// <returns>
+        /// Top VisualElement at the position. Null if none was found.</para>
+        /// </returns>
+        public VisualElement Pick(Vector2 point) => GetVisualChild()?.panel.Pick(point);
+        public VisualElement PickAll(Vector2 point, List<VisualElement> picked) => GetVisualChild()?.panel.PickAll(point, picked);
+
+        /// <summary>
+        /// Whether an element is a descendant or not.
+        /// </summary>
+        /// <param name="element">The element to search for.</param>
+        public bool ContainsInTree(IElement element) => element switch
+        {
+            IRishElement rishElement => ContainsInTree(rishElement),
+            VisualElement visualElement => ContainsInTree(visualElement),
+            _ => false
+        };
+        /// <summary>
+        /// Whether an element is a descendant or not.
+        /// </summary>
+        /// <param name="element">The element to search for.</param>
+        public bool ContainsInTree(VisualElement element)
+        {
+            var domChild = GetVisualChild();
+            if (domChild == null)
+            {
+                return false;
+            }
+            
+            while (element != null)
+            {
+                if (element == domChild)
+                {
+                    return true;
+                }
+                
+                element = element.parent;
+            }
+
+            return false;
+        }
+        /// <summary>
+        /// Whether an element is a descendant or not.
+        /// </summary>
+        /// <param name="element">The element to search for.</param>
+        private bool ContainsInTree(IRishElement element)
+        {
+            if (Node == null)
+            {
+                return false;
+            }
+            
+            var node = element?.Node;
+            while (node != null)
+            {
+                if (node == Node)
+                {
+                    return true;
+                }
+                
+                node = node.Parent;
+            }
+
+            return false;
+        }
+
+        protected ulong GetNodeHashCode() => Node.HashCode;
+    }
+    
+    public abstract partial class RishElement<P, S> : RishElement<P> where P : struct where S : struct
+    {
+        private S? _state;
+        protected S State
+        {
+            get
+            {
+                if (!_state.HasValue)
+                {
+#if UNITY_EDITOR
+                    throw new UnityException($"Accessing unset {typeof(S)}. You should not access State at this point.");
+#else
+                return default;
+#endif
+                }
+
+                return _state.Value;
+            }
+            private set => _state = value;
+        }
+
+        protected bool IsMounted { get; private set; }
+
+        protected RishElement()
+        {
+            OnMounted.Add(Sappy.SetDefaultState);
+            OnUnmounting.Add(Sappy.ClearIsMounted);
+            OnUnmounted.Add(Sappy.ClearState);
+        }
+
+        [SapTarget]
+        private void SetDefaultState()
+        {
+            IsMounted = true;
+
+            ResetState();
+        }
+
+        [SapTarget]
+        private void ClearIsMounted()
+        {
+            IsMounted = false;
+        }
+       
+        [SapTarget] 
+        private void ClearState() => _state = null;
+
+        protected void ResetState()
+        {
+            if (!IsMounted) return;
+
+            var value = Defaults.GetValue<S>();
+            SetState(value);
+        }
+
+        protected void SetState(S value, bool autoControl = true)
+        {
+            if (!IsMounted) return;
+            
+            bool dirty;
+            if (autoControl)
+            {
+                dirty = _state.HasValue && !IsDirty() && !RishUtils.SmartCompare(value, _state.Value);
+
+                if (this is IManaged<S> managed)
+                {
+                    managed.ClaimReferences(value);
+                }
+            }
+            else
+            {
+                dirty = false;
+            }
+
+            State = value;
+
+            if (dirty)
+            {
+                Dirty();
+            }
+        }
+    }
+
+    public abstract class RishElement : RishElement<NoProps> { }
+}

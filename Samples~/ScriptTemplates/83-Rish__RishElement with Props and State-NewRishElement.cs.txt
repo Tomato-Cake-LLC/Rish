@@ -1,0 +1,14 @@
+using RishUI;
+
+#ROOTNAMESPACEBEGIN#
+public partial class #SCRIPTNAME# : RishElement<#SCRIPTNAME#Props, #SCRIPTNAME#State>
+{
+    protected override Element Render() => Element.Null;
+}
+
+[RishValueType]
+public struct #SCRIPTNAME#Props { }
+
+[RishValueType]
+public struct #SCRIPTNAME#State { }
+#ROOTNAMESPACEEND#

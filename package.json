@@ -1,0 +1,29 @@
+{
+  "name": "io.clockworklabs.rish",
+  "version": "3.0.0",
+  "displayName": "Rish",
+  "description": "R[eact]ish UI system for Unity.",
+  "unity": "2022.3",
+  "documentationUrl": "https://rish-ui.com/docs/rish",
+  "author": {
+    "name": "Lisandro Crespo",
+    "email": "lisandro@clockworklabs.io",
+    "url": "https://clockworklabs.io"
+  },
+  "dependencies": {
+    "com.unity.collections": "1.2.4",
+    "io.clockworklabs.sappy": "1.0.0"
+  },
+  "samples": [
+    {
+      "displayName": "Rishenerator",
+      "description": "Roslyn source generator. Highly recommended.",
+      "path": "Samples~/Rishenerator"
+    },
+    {
+      "displayName": "ScriptTemplates",
+      "description": "Script Templates for Create Menu. Must be moved to the Assets folder and restart Unity Editor.",
+      "path": "Samples~/ScriptTemplates"
+    }
+  ]
+}
