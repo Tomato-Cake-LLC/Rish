@@ -116,7 +116,6 @@ namespace RishUI.Elements
         public bool? enableRichText;
         public bool? parseEscapeSequences;
 
-        [IgnoreComparison]
         public Action<bool> onElided;
     }
 }

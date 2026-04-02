@@ -203,19 +203,19 @@ namespace RishUI
         }
 
         [RequiresManagedContext]
-        public static implicit operator Children(string text) => Label.Create(text: text);
+        public static implicit operator Children(string text) => Rish.Create<Label, LabelProps>(key: 0, props: new LabelProps { text = text }, attributes: default, children: Null);
         [RequiresManagedContext]
-        public static implicit operator Children(RishString text) => Label.Create(text: text);
+        public static implicit operator Children(RishString text) => Rish.Create<Label, LabelProps>(key: 0, props: new LabelProps { text = text }, attributes: default, children: Null);
         [RequiresManagedContext]
-        public static implicit operator Children(FixedString32Bytes text) => Label.Create(text: text.Value);
+        public static implicit operator Children(FixedString32Bytes text) => Rish.Create<Label, LabelProps>(key: 0, props: new LabelProps { text = text }, attributes: default, children: Null);
         [RequiresManagedContext]
-        public static implicit operator Children(FixedString64Bytes text) => Label.Create(text: text.Value);
+        public static implicit operator Children(FixedString64Bytes text) => Rish.Create<Label, LabelProps>(key: 0, props: new LabelProps { text = text }, attributes: default, children: Null);
         [RequiresManagedContext]
-        public static implicit operator Children(FixedString128Bytes text) => Label.Create(text: text.Value);
+        public static implicit operator Children(FixedString128Bytes text) => Rish.Create<Label, LabelProps>(key: 0, props: new LabelProps { text = text }, attributes: default, children: Null);
         [RequiresManagedContext]
-        public static implicit operator Children(FixedString512Bytes text) => Label.Create(text: text.Value);
+        public static implicit operator Children(FixedString512Bytes text) => Rish.Create<Label, LabelProps>(key: 0, props: new LabelProps { text = text }, attributes: default, children: Null);
         [RequiresManagedContext]
-        public static implicit operator Children(FixedString4096Bytes text) => Label.Create(text: text.Value);
+        public static implicit operator Children(FixedString4096Bytes text) => Rish.Create<Label, LabelProps>(key: 0, props: new LabelProps { text = text }, attributes: default, children: Null);
 
         bool IEquatable<Children>.Equals(Children other) => Equals(this, other);
 
