@@ -107,8 +107,21 @@ namespace RishUI
         public static Element Create<T>(ulong key, VisualAttributes attributes, Children? children = null) where T : VisualElement, IVisualElement, new()
         {
             var (id, element) = GetFree<VisualDefinition<T>>();
-            element.Factory(key, attributes, default, children ?? Children.Null);
-            
+            element.Factory(key, attributes, default, null, children ?? Children.Null);
+
+            return new Element(id);
+        }
+
+        // Navigable overloads — for elements that should auto-register with NavigationGroup.
+        [RequiresManagedContext]
+        public static Element Create<T>(VisualAttributes attributes, Navigable navigable, Children? children = null)
+            where T : VisualElement, IVisualElement, new() => Create<T>(0, attributes, navigable, children);
+        [RequiresManagedContext]
+        public static Element Create<T>(ulong key, VisualAttributes attributes, Navigable navigable, Children? children = null) where T : VisualElement, IVisualElement, new()
+        {
+            var (id, element) = GetFree<VisualDefinition<T>>();
+            element.Factory(key, attributes, default, navigable, children ?? Children.Null);
+
             return new Element(id);
         }
         
@@ -116,7 +129,7 @@ namespace RishUI
         public static Element Create<T, P>(ulong key, P props, VisualAttributes attributes, Children? children = null) where T : VisualElement, IVisualElement<P>, new() where P : struct
         {
             var (id, element) = GetFree<VisualDefinition<T, P>>();
-            element.Factory(key, attributes, props, children ?? Children.Null);
+            element.Factory(key, attributes, props, null, children ?? Children.Null);
 
             return new Element(id);
         }
@@ -124,18 +137,20 @@ namespace RishUI
         private class VisualDefinition<T, P> : ManagedElement where T : VisualElement, IVisualElement<P>, new() where P : struct
         {
             public override Type Type => typeof(T);
-            
+
             private VisualAttributes Attributes { get; set; }
             private P Props { get; set; }
+            private Navigable? Navigable { get; set; }
             private Children Children { get; set; }
 
-            public void Factory(ulong key, VisualAttributes attributes, P props, Children children)
+            public void Factory(ulong key, VisualAttributes attributes, P props, Navigable? navigable, Children children)
             {
                 Key = key;
                 Attributes = attributes;
                 Props = props;
+                Navigable = navigable;
                 Children = children;
-                
+
                 OwnerContext.AddDependencies(Props);
                 OwnerContext.AddDependencies(attributes.className);
                 OwnerContext.AddDependencies(Children);
@@ -153,17 +168,33 @@ namespace RishUI
                 var node = parent.AddChild<T>(Key);
 #endif
                 if (node is not { Element: T element }) return;
-                
+
 #if UNITY_EDITOR
                 element.Bridge.Setup(Attributes, Children, Props, chain, debugPrefix);
 #else
                 element.Bridge.Setup(Attributes, Children, Props, chain);
 #endif
+                ((IBridge)element.Bridge).SetNavigable(Navigable);
             }
 
             public override bool Equals(ManagedElement other)
             {
-                return other is VisualDefinition<T, P> otherDefinition && Key == otherDefinition.Key && RishUtils.SmartCompare(Props, otherDefinition.Props) && RishUtils.Compare(Attributes, otherDefinition.Attributes) && RishUtils.Compare(Children, otherDefinition.Children);
+                if (other is not VisualDefinition<T, P> otherDefinition) return false;
+                return Key == otherDefinition.Key
+                    && RishUtils.SmartCompare(Props, otherDefinition.Props)
+                    && RishUtils.Compare(Attributes, otherDefinition.Attributes)
+                    && RishUtils.Compare(Children, otherDefinition.Children)
+                    && NavigableEquals(Navigable, otherDefinition.Navigable);
+            }
+
+            private static bool NavigableEquals(Navigable? a, Navigable? b)
+            {
+                if (a.HasValue != b.HasValue) return false;
+                if (!a.HasValue) return true;
+                // MemCmp includes action pointers — forces re-invoke when closures change so
+                // Bridge always holds the latest action. SetNavigable's fast path avoids
+                // re-registration when only lambdas change (structural fields identical).
+                return RishUtils.MemCmp(a.Value, b.Value);
             }
             
             public override bool TryGetProps<P1>(out P1 props)

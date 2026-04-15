@@ -9,11 +9,11 @@ namespace RishUI
     public interface IBridge
     {
         int ID { get; }
-        
+
         SapTargets OnMounted { get; }
         SapTargets OnUnmounted { get; }
         SapTargets OnSetup { get; }
-        
+
         VisualElement Element { get; }
         ClassName ClassName { get; set; }
         Style Style { get; set; }
@@ -21,6 +21,11 @@ namespace RishUI
         void Mount(Node node);
         void StartUnmounting();
         void RemoveFromHierarchy();
+        // Called by visual element Create() factories to register this element with the nearest
+        // ancestor INavigationRegistrar (NavigationGroup). Pass null to unregister.
+        void SetNavigable(Navigable? navigable);
+        // Returns the Navigable most recently set via SetNavigable — always current closures.
+        Navigable? GetNavigable();
 
         T GetFirstAncestorOfType<T>() where T : class;
     }
@@ -622,7 +627,7 @@ namespace RishUI
             {
                 elementStyle.unitySliceTop = style.unitySliceTop;
             }
-#if UNITY_6000_0_OR_NEWER
+#if UNITY_6000_3_OR_NEWER
             if (!RishUtils.MemCmp(_style.unitySliceType, style.unitySliceType))
             {
                 elementStyle.unitySliceType = style.unitySliceType;
@@ -705,21 +710,71 @@ namespace RishUI
         {
             // var unmountingEvt = UnmountingEvent.GetPooled(Element);
             // Element.SendEvent(unmountingEvt);
-            
+
+            if (_navigable.HasValue)
+            {
+                _navRegistrar?.UnregisterNavigable(this);
+                _navigable = null;
+                _navRegistrar = null;
+            }
+
             Element.RemoveFromHierarchy();
             // These are necessary because VisualElements change inline styles from within so even if we don't set something manually, something might have been changed by UIToolkit
             Name = null;
             Element.ResetInlineStyles();
             Element.ClearClassList();
-            
+
             ContextOwner.ReleaseAll();
 
             Manipulable?.Reset();
-            
+
             Node = null;
-            
+
             OnUnmountedStem.Send();
         }
+
+        private Navigable? _navigable;
+        private INavigationRegistrar _navRegistrar;
+
+        void IBridge.SetNavigable(Navigable? navigable)
+        {
+            // Fast path: structurally identical (interactable/isDefault/isBackButton unchanged).
+            // Update delegate fields in-place so Bridge always holds the latest closures.
+            if (_navigable.HasValue == navigable.HasValue
+                && (!navigable.HasValue || Navigable.Equals(_navigable.Value, navigable.Value)))
+            {
+                _navigable = navigable;
+                return;
+            }
+
+            var prev = _navigable;
+            _navigable = navigable;
+
+            if (!navigable.HasValue)
+            {
+                _navRegistrar?.UnregisterNavigable(this);
+                _navRegistrar = null;
+                return;
+            }
+
+            // Lazily discover the nearest NavigationGroup on first registration.
+            _navRegistrar ??= Node?.GetFirstAncestorOfType<INavigationRegistrar>();
+            if (_navRegistrar == null)
+            {
+                return;
+            }
+
+            if (!prev.HasValue)
+            {
+                _navRegistrar.RegisterNavigable(this, navigable.Value);
+            }
+            else
+            {
+                _navRegistrar.UpdateNavigable(this, navigable.Value);
+            }
+        }
+
+        Navigable? IBridge.GetNavigable() => _navigable;
 
         T IBridge.GetFirstAncestorOfType<T>() => Node?.GetFirstAncestorOfType<T>();
         public T GetFirstAncestorOfType<T>() where T:class => ((IBridge)this).GetFirstAncestorOfType<T>();
