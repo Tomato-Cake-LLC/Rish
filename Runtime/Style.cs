@@ -404,7 +404,7 @@ namespace RishUI
                 unitySliceRight = otherStyle.unitySliceRight,
                 unitySliceScale = otherStyle.unitySliceScale,
                 unitySliceTop = otherStyle.unitySliceTop,
-#if UNITY_6000_0_OR_NEWER
+#if UNITY_6000_3_OR_NEWER
                 unitySliceType = otherStyle.unitySliceType,
 #endif
                 unityTextAlign = otherStyle.unityTextAlign,
