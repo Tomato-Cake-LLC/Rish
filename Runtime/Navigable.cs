@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using UnityEngine;
 
 namespace RishUI
 {
@@ -17,6 +18,11 @@ namespace RishUI
         public Action? holdEndAction;
         // Fired by INavigationRegistrar when gamepad focus changes — null if no side-effect needed.
         public Action<bool>? onFocusChanged;
+        // Directional input while focused, +X right and +Y up. Return true to eat it so focus stays
+        // put: that is how a slider takes Left/Right instead of hopping to the next control.
+        public Func<Vector2, bool>? onAxis;
+        // Fired when the direction is released, so onAxis can drive a hold-to-repeat.
+        public Action? onAxisEnd;
         public bool interactable;
         public bool isDefault;
         public bool isBackButton;
