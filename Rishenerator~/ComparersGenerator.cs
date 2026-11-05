@@ -168,10 +168,11 @@ namespace Rishenerator
 
                 var fieldTypeSymbol = fieldSymbol.Type;
 
-                if (fieldTypeSymbol.NullableAnnotation == NullableAnnotation.Annotated)
+                // Only Nullable<T> wraps its type; an annotated reference type (Sprite?) is itself.
+                if (fieldTypeSymbol is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullableType)
                 {
                     Nullable = true;
-                    fieldTypeSymbol = ((INamedTypeSymbol)fieldTypeSymbol).TypeArguments[0];
+                    fieldTypeSymbol = nullableType.TypeArguments[0];
                 }
                 
                 if (fieldSymbol.IsStatic || fieldSymbol.IsConst || fieldSymbol.DeclaredAccessibility != Accessibility.Public)
